@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/asn1"
 	"errors"
 	"fmt"
@@ -32,14 +33,86 @@ func (p7 *PKCS7) Decrypt(cert *x509.Certificate, pkey crypto.PrivateKey) ([]byte
 	}
 	switch pkey := pkey.(type) {
 	case *rsa.PrivateKey:
-		var contentKey []byte
-		contentKey, err := rsa.DecryptPKCS1v15(rand.Reader, pkey, recipient.EncryptedKey)
+		contentKey, err := decryptContentKey(pkey, recipient)
 		if err != nil {
 			return nil, err
 		}
 		return data.EncryptedContentInfo.Decrypt(contentKey)
 	}
 	return nil, ErrUnsupportedAlgorithm
+}
+
+// decryptContentKey unwraps the content-encryption key with the mechanism the
+// sender declared, instead of assuming PKCS#1 v1.5: Windows SCEP clients can
+// use RSAES-OAEP, which fails PKCS#1 v1.5 unpadding.
+func decryptContentKey(pkey *rsa.PrivateKey, recipient recipientInfo) ([]byte, error) {
+	alg := recipient.KeyEncryptionAlgorithm
+	switch {
+	case alg.Algorithm.Equal(OIDEncryptionAlgorithmRSA):
+		return rsa.DecryptPKCS1v15(rand.Reader, pkey, recipient.EncryptedKey)
+	case alg.Algorithm.Equal(OIDEncryptionAlgorithmRSAESOAEP):
+		opts, err := parseRSAOAEPParameters(alg.Parameters)
+		if err != nil {
+			return nil, err
+		}
+		return pkey.Decrypt(rand.Reader, recipient.EncryptedKey, opts)
+	}
+	return nil, fmt.Errorf("pkcs7: unsupported key encryption algorithm %s", alg.Algorithm)
+}
+
+// rsaOAEPParameters is RSAES-OAEP-params from RFC 4055 section 4.1.
+type rsaOAEPParameters struct {
+	HashFunc    pkix.AlgorithmIdentifier `asn1:"optional,explicit,tag:0"`
+	MaskGenFunc pkix.AlgorithmIdentifier `asn1:"optional,explicit,tag:1"`
+	PSourceFunc pkix.AlgorithmIdentifier `asn1:"optional,explicit,tag:2"`
+}
+
+// parseRSAOAEPParameters reads the OAEP hash, MGF1 hash and label. Absent
+// fields take the RFC 8017 defaults: SHA-1, MGF1 with SHA-1 and an empty label.
+func parseRSAOAEPParameters(raw asn1.RawValue) (*rsa.OAEPOptions, error) {
+	var params rsaOAEPParameters
+	// RFC 4055 requires the parameters, but an absent field still means defaults.
+	if len(raw.FullBytes) > 0 {
+		rest, err := asn1.Unmarshal(raw.FullBytes, &params)
+		if err != nil {
+			return nil, fmt.Errorf("pkcs7: invalid RSAES-OAEP parameters: %v", err)
+		}
+		if len(rest) > 0 {
+			return nil, errors.New("pkcs7: trailing data after RSAES-OAEP parameters")
+		}
+	}
+
+	opts := &rsa.OAEPOptions{Hash: crypto.SHA1, MGFHash: crypto.SHA1}
+	if params.HashFunc.Algorithm != nil {
+		hash, err := getHashForOID(params.HashFunc.Algorithm)
+		if err != nil {
+			return nil, fmt.Errorf("pkcs7: unsupported RSAES-OAEP hash %s", params.HashFunc.Algorithm)
+		}
+		opts.Hash = hash
+	}
+	if params.MaskGenFunc.Algorithm != nil {
+		if !params.MaskGenFunc.Algorithm.Equal(OIDMaskGenerationFunctionMGF1) {
+			return nil, fmt.Errorf("pkcs7: unsupported RSAES-OAEP mask generation function %s", params.MaskGenFunc.Algorithm)
+		}
+		var mgfHash pkix.AlgorithmIdentifier
+		if _, err := asn1.Unmarshal(params.MaskGenFunc.Parameters.FullBytes, &mgfHash); err != nil {
+			return nil, fmt.Errorf("pkcs7: invalid RSAES-OAEP MGF1 parameters: %v", err)
+		}
+		hash, err := getHashForOID(mgfHash.Algorithm)
+		if err != nil {
+			return nil, fmt.Errorf("pkcs7: unsupported RSAES-OAEP MGF1 hash %s", mgfHash.Algorithm)
+		}
+		opts.MGFHash = hash
+	}
+	if params.PSourceFunc.Algorithm != nil {
+		if !params.PSourceFunc.Algorithm.Equal(OIDPSourceAlgorithmPSpecified) {
+			return nil, fmt.Errorf("pkcs7: unsupported RSAES-OAEP label source %s", params.PSourceFunc.Algorithm)
+		}
+		if _, err := asn1.Unmarshal(params.PSourceFunc.Parameters.FullBytes, &opts.Label); err != nil {
+			return nil, fmt.Errorf("pkcs7: invalid RSAES-OAEP label: %v", err)
+		}
+	}
+	return opts, nil
 }
 
 // DecryptUsingPSK decrypts encrypted data using caller provided

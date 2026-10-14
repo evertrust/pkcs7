@@ -74,6 +74,11 @@ var (
 	OIDEncryptionAlgorithmECDSAP384 = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
 	OIDEncryptionAlgorithmECDSAP521 = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
 
+	// Key Transport Algorithms
+	OIDEncryptionAlgorithmRSAESOAEP = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 7}
+	OIDMaskGenerationFunctionMGF1   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 8}
+	OIDPSourceAlgorithmPSpecified   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 9}
+
 	// Encryption Algorithms
 	OIDEncryptionAlgorithmDESCBC     = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 7}
 	OIDEncryptionAlgorithmDESEDE3CBC = asn1.ObjectIdentifier{1, 2, 840, 113549, 3, 7}
