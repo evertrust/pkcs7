@@ -6,15 +6,16 @@ jobs:
     name: Test
     strategy:
       matrix:
-        go: ['1.12', '1.13', '1.14', '1.15', '1.16']
-    runs-on: ubuntu-latest
+        go: ['1.26', '1.27']
+    runs-on: runs-on=${{ github.run_id }}/runner=evertrust
     steps:
-    - uses: actions/checkout@v2
+    - name: Setup runner
+      uses: runs-on/action@v2
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
-    - uses: actions/setup-go@v2
+    - uses: actions/setup-go@v7
       with:
         go-version: ${{ matrix.go }}
-        stable: false
     - name: Test
       run: go vet . && go build . && go test -count=1 -covermode=count -coverprofile=coverage.out .
